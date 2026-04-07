@@ -2,7 +2,7 @@ name: Release .deb
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 jobs:
   build-deb:
@@ -12,24 +12,31 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install nfpm
+      - name: Install svu
         run: |
           echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' \
             | sudo tee /etc/apt/sources.list.d/goreleaser.list
           sudo apt-get update
-          sudo apt-get install -y nfpm
+          sudo apt-get install -y svu nfpm
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(svu next)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
 
       - name: Build package tree
         run: |
-          # Install the package and its dependencies into the build tree
           pip install --target=build/usr/lib/python3/dist-packages/ .
 
-          # Create the entry point wrapper
           mkdir -p build/usr/bin
           cat > build/usr/bin/memex-client << 'SCRIPT'
           #!/usr/bin/python3
@@ -42,10 +49,14 @@ jobs:
 
       - name: Build .deb
         run: |
-          export VERSION=${GITHUB_REF_NAME#v}
-          nfpm package --packager deb --target dist/
+          mkdir -p dist
+          VERSION=${{ steps.version.outputs.version }} nfpm package --packager deb --target dist/
 
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.deb
+      - name: Create tag and release
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          git tag "$VERSION"
+          git push origin "$VERSION"
+          gh release create "$VERSION" dist/*.deb --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
