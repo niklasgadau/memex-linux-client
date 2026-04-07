@@ -21,15 +21,12 @@ jobs:
 
       - name: Install svu and nfpm
         run: |
-          # svu via GitHub release binary
-          curl -sL https://github.com/caarlos0/svu/releases/latest/download/svu_linux_amd64.tar.gz \
-            | sudo tar xz -C /usr/local/bin svu
-
-          # nfpm via goreleaser apt repo
-          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' \
-            | sudo tee /etc/apt/sources.list.d/goreleaser.list
-          sudo apt-get update
-          sudo apt-get install -y nfpm
+          # svu + nfpm via .deb from GitHub releases
+          gh release download --repo caarlos0/svu --pattern '*amd64.deb' --dir /tmp
+          gh release download --repo goreleaser/nfpm --pattern '*amd64.deb' --dir /tmp
+          sudo dpkg -i /tmp/svu_*_amd64.deb /tmp/nfpm_*_amd64.deb
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Determine version
         id: version
