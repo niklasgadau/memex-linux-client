@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from memex_client.api import MemexAPI
-from memex_client.config import get_client_id
+from memex_client.config import get_client_id, resolve_client_name
 from memex_client.exporters.base import BaseExporter
 from memex_client.state import SyncState
 
@@ -17,6 +17,7 @@ class GPasteExporter(BaseExporter):
 
     def __init__(self, config: dict, state: SyncState, api: MemexAPI) -> None:
         super().__init__(config, state, api)
+        self.client_name = resolve_client_name(config)
         self.client_id = get_client_id()
 
         gpaste_cfg = config.get("sources", {}).get("gpaste", {})
@@ -67,7 +68,8 @@ class GPasteExporter(BaseExporter):
             entries.append({
                 "content": content,
                 "kind": "Text",
-                "client": self.client_id,
+                "client": self.client_name,
+            "client_id": self.client_id,
                 "timestamp": mtime,
             })
             self._new_synced_uuids.add(uuid)
