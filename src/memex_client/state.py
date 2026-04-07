@@ -30,5 +30,9 @@ class SyncState:
         tmp.write_text(json.dumps(self._data, indent=2))
         os.replace(tmp, STATE_PATH)
 
+    def reset(self, source: str) -> None:
+        self._data.pop(source, None)
+        self._save()
+
     def all(self) -> dict:
         return dict(self._data)

@@ -46,7 +46,8 @@ def main() -> None:
 
 @main.command()
 @click.argument("source", required=False, default=None)
-def sync(source: str | None) -> None:
+@click.option("--full", is_flag=True, help="Reset local state and re-sync everything.")
+def sync(source: str | None, full: bool) -> None:
     """Run exporters to sync data to memex-server.
 
     Optionally specify a single source: fish, bash, gpaste.
@@ -68,6 +69,11 @@ def sync(source: str | None) -> None:
     if not sources_to_sync:
         click.echo("No sources enabled. Run 'memex-client setup' first.", err=True)
         sys.exit(1)
+
+    if full:
+        for name in sources_to_sync:
+            state.reset(name)
+        click.echo("State reset — running full sync.")
 
     errors = False
     for name in sources_to_sync:
