@@ -19,12 +19,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install svu
+      - name: Install svu and nfpm
         run: |
+          # svu via GitHub release binary
+          curl -sL https://github.com/caarlos0/svu/releases/latest/download/svu_linux_amd64.tar.gz \
+            | sudo tar xz -C /usr/local/bin svu
+
+          # nfpm via goreleaser apt repo
           echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' \
             | sudo tee /etc/apt/sources.list.d/goreleaser.list
           sudo apt-get update
-          sudo apt-get install -y svu nfpm
+          sudo apt-get install -y nfpm
 
       - name: Determine version
         id: version
