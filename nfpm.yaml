@@ -1,0 +1,33 @@
+name: memex-client
+arch: amd64
+version: "${VERSION}"
+maintainer: "Niklas Gadau"
+description: "Linux client for Memex — syncs shell history and clipboard to memex-server"
+homepage: "https://github.com/niklasgadau/memex-linux-client"
+license: MIT
+
+depends:
+  - python3 (>= 3.11)
+
+recommends:
+  - libnotify-bin
+
+contents:
+  - src: build/usr/bin/memex-client
+    dst: /usr/bin/memex-client
+    file_info:
+      mode: 0755
+
+  - src: build/usr/lib/python3/dist-packages/
+    dst: /usr/lib/python3/dist-packages/
+    type: tree
+
+  - src: systemd/memex-sync.service
+    dst: /usr/lib/systemd/user/memex-sync.service
+
+  - src: systemd/memex-sync.timer
+    dst: /usr/lib/systemd/user/memex-sync.timer
+
+scripts:
+  postinstall: packaging/postinst.sh
+  preremove: packaging/prerm.sh

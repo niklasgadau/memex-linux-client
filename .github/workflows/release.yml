@@ -1,0 +1,51 @@
+name: Release .deb
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install nfpm
+        run: |
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' \
+            | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update
+          sudo apt-get install -y nfpm
+
+      - name: Build package tree
+        run: |
+          # Install the package and its dependencies into the build tree
+          pip install --target=build/usr/lib/python3/dist-packages/ .
+
+          # Create the entry point wrapper
+          mkdir -p build/usr/bin
+          cat > build/usr/bin/memex-client << 'SCRIPT'
+          #!/usr/bin/python3
+          import sys
+          sys.path.insert(0, "/usr/lib/python3/dist-packages")
+          from memex_client.cli import main
+          main()
+          SCRIPT
+          chmod +x build/usr/bin/memex-client
+
+      - name: Build .deb
+        run: |
+          export VERSION=${GITHUB_REF_NAME#v}
+          nfpm package --packager deb --target dist/
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
