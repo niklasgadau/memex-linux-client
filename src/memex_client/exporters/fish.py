@@ -35,11 +35,12 @@ class FishExporter(BaseExporter):
         if file_size == offset:
             return []
 
-        with open(FISH_HISTORY, "r", errors="replace") as f:
+        with open(FISH_HISTORY, "rb") as f:
             f.seek(offset)
-            raw = f.read()
+            raw_bytes = f.read()
 
-        self._new_offset = offset + len(raw.encode())
+        self._new_offset = offset + len(raw_bytes)
+        raw = raw_bytes.decode("utf-8", errors="replace")
         return self._parse(raw)
 
     def _parse(self, raw: str) -> list[dict]:
