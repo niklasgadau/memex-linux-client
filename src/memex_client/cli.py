@@ -10,6 +10,7 @@ import click
 from memex_client.api import MemexAPI
 from memex_client.config import (
     CONFIG_PATH,
+    get_client_id,
     load_config,
     resolve_client_name,
     write_config,
@@ -29,6 +30,13 @@ def _load_exporter(name: str):
     import importlib
     mod = importlib.import_module(module_path)
     return getattr(mod, class_name)
+
+
+def _is_source_enabled(sources_cfg: dict, name: str) -> bool:
+    val = sources_cfg.get(name, False)
+    if isinstance(val, dict):
+        return val.get("enabled", False)
+    return bool(val)
 
 
 @click.group()
@@ -55,7 +63,7 @@ def sync(source: str | None) -> None:
             sys.exit(1)
         sources_to_sync = [source]
     else:
-        sources_to_sync = [s for s in EXPORTERS if sources_cfg.get(s, False)]
+        sources_to_sync = [s for s in EXPORTERS if _is_source_enabled(sources_cfg, s)]
 
     if not sources_to_sync:
         click.echo("No sources enabled. Run 'memex-client setup' first.", err=True)
@@ -157,14 +165,13 @@ def status() -> None:
     click.echo(f"  Config file:  {CONFIG_PATH}")
     click.echo(f"  Server:       {cfg['api_url']}")
     click.echo(f"  Client:       {resolve_client_name(cfg)}")
+    click.echo(f"  Client ID:    {get_client_id()}")
     click.echo(f"  Token:        {'set' if cfg.get('api_token') else 'not set'}")
 
     sources = cfg.get("sources", {})
     click.echo(f"\nSources:")
     for name in EXPORTERS:
-        enabled = sources.get(name, False)
-        if isinstance(enabled, dict):
-            enabled = True
+        enabled = _is_source_enabled(sources, name)
         mark = "enabled" if enabled else "disabled"
         sync_info = state.get(name)
         last = sync_info.get("last_sync_time", "never") if sync_info else "never"
