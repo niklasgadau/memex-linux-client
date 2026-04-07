@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      pages: write
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +23,6 @@ jobs:
 
       - name: Install svu and nfpm
         run: |
-          # svu + nfpm via .deb from GitHub releases
           gh release download --repo caarlos0/svu --pattern '*amd64.deb' --dir /tmp
           gh release download --repo goreleaser/nfpm --pattern '*amd64.deb' --dir /tmp
           sudo dpkg -i /tmp/svu_*_amd64.deb /tmp/nfpm_*_amd64.deb
@@ -62,3 +63,38 @@ jobs:
           gh release create "$VERSION" dist/*.deb --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Build APT repository
+        run: |
+          sudo apt-get install -y reprepro
+
+          mkdir -p apt-repo/conf
+          cat > apt-repo/conf/distributions <<'CONF'
+          Origin: memex-linux-client
+          Label: memex-linux-client
+          Codename: stable
+          Architectures: amd64
+          Components: main
+          Description: Memex Linux Client APT Repository
+          SignWith: default
+          CONF
+
+          # Add current .deb
+          reprepro -b apt-repo includedeb stable dist/*.deb
+
+          # Export public key for clients
+          gpg --armor --export > apt-repo/KEY.gpg
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apt-repo
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
