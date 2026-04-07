@@ -8,6 +8,14 @@ license: MIT
 
 depends:
   - python3 (>= 3.11)
+  - python3-click
+  - python3-httpx
+  - python3-certifi
+  - python3-idna
+  - python3-anyio
+  - python3-sniffio
+  - python3-h11
+  - python3-httpcore
 
 recommends:
   - libnotify-bin

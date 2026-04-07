@@ -38,13 +38,15 @@ jobs:
 
       - name: Build package tree
         run: |
-          pip install --target=build/usr/lib/python3/dist-packages/ .
+          # Only install memex_client itself, dependencies come from system .debs
+          pip install --target=build/usr/lib/python3/dist-packages/ --no-deps .
+
+          # Remove metadata dirs that conflict with system packages
+          rm -rf build/usr/lib/python3/dist-packages/*.dist-info
 
           mkdir -p build/usr/bin
           cat > build/usr/bin/memex-client << 'SCRIPT'
           #!/usr/bin/python3
-          import sys
-          sys.path.insert(0, "/usr/lib/python3/dist-packages")
           from memex_client.cli import main
           main()
           SCRIPT
