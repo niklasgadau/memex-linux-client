@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import sys
 from pathlib import Path
 
 import click
+import httpx
 
-from memex_client.api import MemexAPI
+from memex_client.api import AuthError, MemexAPI
 from memex_client.config import (
     CONFIG_PATH,
+    auth_mode,
     get_client_id,
     load_config,
     resolve_client_name,
+    update_auth,
     write_config,
 )
 from memex_client.state import SyncState
@@ -39,6 +43,15 @@ def _is_source_enabled(sources_cfg: dict, name: str) -> bool:
     return bool(val)
 
 
+def _warn_if_legacy(cfg: dict) -> None:
+    if auth_mode(cfg) == "legacy-jwt":
+        click.echo(
+            "Warning: using legacy cf-access-token (24h expiry). "
+            "Run 'memex-client auth' to migrate to a service token.",
+            err=True,
+        )
+
+
 @click.group()
 def main() -> None:
     """Memex Linux Client — sync shell history & clipboard to memex-server."""
@@ -53,8 +66,9 @@ def sync(source: str | None, full: bool) -> None:
     Optionally specify a single source: fish, bash, gpaste.
     """
     cfg = load_config()
+    _warn_if_legacy(cfg)
     state = SyncState()
-    api = MemexAPI(cfg["api_url"], cfg.get("api_token", ""))
+    api = MemexAPI.from_config(cfg)
 
     sources_cfg = cfg.get("sources", {})
 
@@ -93,21 +107,163 @@ def sync(source: str | None, full: bool) -> None:
         sys.exit(1)
 
 
+CF_API_BASE = "https://api.cloudflare.com/client/v4"
+
+
+def _create_service_token_via_cf_api(
+    account_id: str, api_token: str, name: str
+) -> tuple[str, str]:
+    """Call CF API to create a new service token. Returns (client_id, client_secret).
+
+    The secret is returned by CF only on creation — never persisted by CF, never
+    retrievable later. We hand it straight to the caller; storage is its problem.
+    """
+    url = f"{CF_API_BASE}/accounts/{account_id}/access/service_tokens"
+    resp = httpx.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json",
+        },
+        json={"name": name},
+        timeout=30.0,
+    )
+    if resp.status_code == 401:
+        raise click.ClickException(
+            "Cloudflare API rejected the API token (401). "
+            "Check it has 'Account → Access: Service Tokens → Edit' permission."
+        )
+    if resp.status_code == 404:
+        raise click.ClickException(
+            f"Cloudflare API returned 404 — account ID '{account_id}' not found "
+            "or token lacks access to it."
+        )
+    if resp.status_code >= 400:
+        raise click.ClickException(
+            f"Cloudflare API error {resp.status_code}: {resp.text[:300]}"
+        )
+
+    data = resp.json()
+    if not data.get("success"):
+        errors = data.get("errors", [])
+        raise click.ClickException(f"Cloudflare API call failed: {errors}")
+
+    result = data["result"]
+    return result["client_id"], result["client_secret"]
+
+
+def _auth_wizard() -> tuple[str, str]:
+    """Interactive flow to obtain a service-token (client_id, client_secret).
+
+    Two branches:
+      [1] User already has a token → just collect it
+      [2] User wants to create one → call CF API on their behalf
+
+    Branch [2] requires a Cloudflare API token with the 'Access: Service Tokens'
+    edit permission. We do NOT persist the API token; it's used once and dropped.
+    """
+    click.echo("\nCloudflare Service Token")
+    click.echo("------------------------")
+    click.echo("  [1] I already have a Client-ID + Client-Secret")
+    click.echo("  [2] Create a new service token via the Cloudflare API")
+    choice = click.prompt("Choose", type=click.Choice(["1", "2"]), default="1")
+
+    if choice == "1":
+        client_id = click.prompt("CF-Access-Client-Id (ends in '.access')")
+        client_secret = click.prompt("CF-Access-Client-Secret", hide_input=True)
+        return client_id.strip(), client_secret.strip()
+
+    click.echo(
+        "\nThis will call the Cloudflare API to create a new service token."
+    )
+    click.echo(
+        "You need a Cloudflare API token with permission "
+        "'Account → Access: Service Tokens → Edit'."
+    )
+    click.echo("Create one at: https://dash.cloudflare.com/profile/api-tokens\n")
+
+    api_token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+    if api_token:
+        click.echo("Using CLOUDFLARE_API_TOKEN from environment.")
+    else:
+        api_token = click.prompt("Cloudflare API Token", hide_input=True)
+
+    account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+    if account_id:
+        click.echo(f"Using CLOUDFLARE_ACCOUNT_ID from environment: {account_id}")
+    else:
+        account_id = click.prompt("Cloudflare Account ID")
+
+    default_name = f"memex-linux-{socket.gethostname()}"
+    token_name = click.prompt("Token name", default=default_name)
+
+    click.echo("\nCreating service token...")
+    client_id, client_secret = _create_service_token_via_cf_api(
+        account_id.strip(), api_token.strip(), token_name.strip()
+    )
+    click.echo(f"  Created: {client_id}")
+    click.echo("  (the secret is shown only once and stored in your config)")
+    return client_id, client_secret
+
+
+def _print_policy_hint() -> None:
+    click.echo("")
+    click.echo("If the test still fails with 403/forbidden:")
+    click.echo("  1. Open https://one.dash.cloudflare.com/")
+    click.echo("  2. Zero Trust → Access → Applications → memex → Edit")
+    click.echo("  3. Policies → add or edit a policy")
+    click.echo("  4. Include → 'Service Auth' → select your token name")
+    click.echo("  5. Save and re-run 'memex-client status'")
+
+
+def _test_auth(api_url: str, client_id: str, client_secret: str) -> None:
+    api = MemexAPI(api_url, cf_client_id=client_id, cf_client_secret=client_secret)
+    try:
+        api.probe()
+        click.echo("  Server reachable and authorized.")
+    except AuthError as e:
+        click.echo(f"  {e.mode}: {e}", err=True)
+        if e.mode == "forbidden":
+            _print_policy_hint()
+        elif e.mode == "invalid":
+            click.echo(
+                "  → Credentials look syntactically present but CF Access rejected them. "
+                "Double-check Client-ID/Secret.",
+                err=True,
+            )
+    finally:
+        api.close()
+
+
+@main.command()
+def auth() -> None:
+    """Refresh Cloudflare Access credentials (service token).
+
+    Use this to rotate the token or migrate from a legacy api_token.
+    """
+    cfg = load_config()
+    click.echo(f"Server: {cfg['api_url']}")
+    click.echo(f"Current auth mode: {auth_mode(cfg)}")
+
+    client_id, client_secret = _auth_wizard()
+    update_auth(client_id, client_secret)
+    click.echo(f"\nCredentials written to {CONFIG_PATH}")
+
+    click.echo("\nTesting connection...")
+    _test_auth(cfg["api_url"], client_id, client_secret)
+
+
 @main.command()
 def setup() -> None:
     """Interactive first-time configuration."""
     click.echo("Memex Client Setup\n")
 
-    # Server URL
     api_url = click.prompt("Server URL", default="http://localhost:8080")
 
-    # API Token
-    api_token = click.prompt("API Token", default="", show_default=False)
+    client_id, client_secret = _auth_wizard()
 
-    # Client name
-    client_name = click.prompt("Client name", default=socket.gethostname())
+    client_name = click.prompt("\nClient name", default=socket.gethostname())
 
-    # Auto-detect sources
     sources: dict = {}
     click.echo("\nDetected sources:")
 
@@ -138,25 +294,23 @@ def setup() -> None:
         click.echo("  GPaste — not found")
         sources["gpaste"] = False
 
-    # Test connectivity
     click.echo(f"\nTesting connection to {api_url}...")
-    api = MemexAPI(api_url, api_token)
-    if api.health_check():
-        click.echo("  Server reachable!")
-    else:
-        click.echo("  Server not reachable — config will be saved anyway.")
-    api.close()
+    _test_auth(api_url, client_id, client_secret)
 
-    # Notifications
     notifications = {
         "enabled": click.confirm("\nEnable desktop notifications on sync failure?", default=True)
     }
 
-    # Write config
-    write_config(api_url, api_token, client_name, sources, notifications)
+    write_config(
+        api_url=api_url,
+        client=client_name,
+        sources=sources,
+        notifications=notifications,
+        cf_client_id=client_id,
+        cf_client_secret=client_secret,
+    )
     click.echo(f"\nConfig written to {CONFIG_PATH}")
 
-    # Offer to install timer
     if click.confirm("Install systemd timer for background sync?", default=True):
         _install_timer()
 
@@ -166,13 +320,16 @@ def status() -> None:
     """Show configuration, sync state, and timer status."""
     cfg = load_config()
     state = SyncState()
+    mode = auth_mode(cfg)
 
     click.echo("Configuration:")
     click.echo(f"  Config file:  {CONFIG_PATH}")
     click.echo(f"  Server:       {cfg['api_url']}")
     click.echo(f"  Client:       {resolve_client_name(cfg)}")
     click.echo(f"  Client ID:    {get_client_id()}")
-    click.echo(f"  Token:        {'set' if cfg.get('api_token') else 'not set'}")
+    click.echo(f"  Auth mode:    {mode}")
+    if mode == "legacy-jwt":
+        click.echo("                (deprecated — run 'memex-client auth' to migrate)")
 
     sources = cfg.get("sources", {})
     click.echo(f"\nSources:")
@@ -183,7 +340,6 @@ def status() -> None:
         last = sync_info.get("last_sync_time", "never") if sync_info else "never"
         click.echo(f"  {name:8s}  {mark:10s}  last sync: {last}")
 
-    # Timer status
     click.echo(f"\nSystemd timer:")
     try:
         result = subprocess.run(
@@ -195,12 +351,15 @@ def status() -> None:
         timer_status = "systemctl not found"
     click.echo(f"  {timer_status}")
 
-    # Server connectivity
     click.echo(f"\nServer:")
-    api = MemexAPI(cfg["api_url"], cfg.get("api_token", ""))
-    reachable = api.health_check()
-    api.close()
-    click.echo(f"  {'reachable' if reachable else 'not reachable'}")
+    api = MemexAPI.from_config(cfg)
+    try:
+        api.probe()
+        click.echo("  reachable and authorized")
+    except AuthError as e:
+        click.echo(f"  {e.mode}: {e}")
+    finally:
+        api.close()
 
 
 SYSTEMD_USER_DIR = Path.home() / ".config" / "systemd" / "user"
