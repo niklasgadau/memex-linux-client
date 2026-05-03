@@ -16,6 +16,8 @@ depends:
   - python3-sniffio
   - python3-h11
   - python3-httpcore
+  - python3-dbus
+  - python3-gi
 
 recommends:
   - libnotify-bin
@@ -35,6 +37,9 @@ contents:
 
   - src: systemd/memex-sync.timer
     dst: /usr/lib/systemd/user/memex-sync.timer
+
+  - src: systemd/memex-clipboard-daemon.service
+    dst: /usr/lib/systemd/user/memex-clipboard-daemon.service
 
 scripts:
   postinstall: packaging/postinst.sh

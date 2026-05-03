@@ -340,16 +340,20 @@ def status() -> None:
         last = sync_info.get("last_sync_time", "never") if sync_info else "never"
         click.echo(f"  {name:8s}  {mark:10s}  last sync: {last}")
 
-    click.echo(f"\nSystemd timer:")
-    try:
-        result = subprocess.run(
-            ["systemctl", "--user", "is-active", "memex-sync.timer"],
-            capture_output=True, text=True,
-        )
-        timer_status = result.stdout.strip() or "not installed"
-    except FileNotFoundError:
-        timer_status = "systemctl not found"
-    click.echo(f"  {timer_status}")
+    click.echo(f"\nSystemd:")
+    for unit, label in (
+        ("memex-sync.timer", "5-min sync timer"),
+        ("memex-clipboard-daemon.service", "live clipboard daemon"),
+    ):
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "is-active", unit],
+                capture_output=True, text=True,
+            )
+            unit_status = result.stdout.strip() or "not installed"
+        except FileNotFoundError:
+            unit_status = "systemctl not found"
+        click.echo(f"  {label:24s}  {unit_status}")
 
     click.echo(f"\nServer:")
     api = MemexAPI.from_config(cfg)
@@ -395,25 +399,115 @@ def _install_timer() -> None:
     click.echo("Systemd timer installed and started.")
 
 
+SYSTEMD_UNITS = (
+    "memex-sync.service",
+    "memex-sync.timer",
+    "memex-clipboard-daemon.service",
+)
+
+
+def _copy_systemd_units() -> bool:
+    """Copy any present unit files from the package or local dev tree.
+
+    Returns True if at least one unit was copied.
+    """
+    source = _systemd_source_dir()
+    SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
+    import shutil
+    found_any = False
+    for name in SYSTEMD_UNITS:
+        src = source / name
+        if src.exists():
+            shutil.copy2(src, SYSTEMD_USER_DIR / name)
+            found_any = True
+    return found_any
+
+
+def _install_daemon() -> None:
+    if not (SYSTEMD_USER_DIR / "memex-clipboard-daemon.service").exists():
+        click.echo("Clipboard daemon unit not installed (file missing).", err=True)
+        return
+    subprocess.run(
+        ["systemctl", "--user", "enable", "--now", "memex-clipboard-daemon.service"],
+        check=True,
+    )
+    click.echo("Clipboard daemon installed and started.")
+
+
 @main.command()
 def install() -> None:
-    """Install and enable the systemd user timer for background sync."""
+    """Install systemd units: 5-min sync timer + live clipboard daemon."""
+    if not _copy_systemd_units():
+        click.echo(f"Systemd units not found at {_systemd_source_dir()}", err=True)
+        return
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     _install_timer()
+    _install_daemon()
+
+
+@main.command("install-timer")
+def install_timer_only() -> None:
+    """Install only the 5-min sync timer (no clipboard daemon)."""
+    _install_timer()
+
+
+@main.command("install-daemon")
+def install_daemon_only() -> None:
+    """Install only the live clipboard daemon (no 5-min timer)."""
+    if not _copy_systemd_units():
+        click.echo(f"Systemd units not found at {_systemd_source_dir()}", err=True)
+        return
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    _install_daemon()
 
 
 @main.command()
 def uninstall() -> None:
-    """Disable and remove the systemd user timer."""
-    subprocess.run(
-        ["systemctl", "--user", "disable", "--now", "memex-sync.timer"],
-        check=False,
-    )
-    for name in ("memex-sync.service", "memex-sync.timer"):
+    """Disable and remove all systemd user units installed by this client."""
+    for unit in (
+        "memex-sync.timer",
+        "memex-sync.service",
+        "memex-clipboard-daemon.service",
+    ):
+        subprocess.run(
+            ["systemctl", "--user", "disable", "--now", unit],
+            check=False,
+            capture_output=True,
+        )
+    for name in SYSTEMD_UNITS:
         unit = SYSTEMD_USER_DIR / name
         if unit.exists():
             unit.unlink()
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    click.echo("Systemd timer removed.")
+    click.echo("Systemd units removed.")
+
+
+@main.command()
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging.")
+def daemon(verbose: bool) -> None:
+    """Run the live clipboard daemon (foreground; blocks).
+
+    Subscribes to GPaste's DBus `Update` signal and pushes new clipboard
+    entries to memex-server within ~100 ms of the user copying them.
+
+    Normally not run by hand — see `memex-client install-daemon` to register
+    it as a systemd user service.
+    """
+    from memex_client.daemon import ClipboardDaemon, setup_logging
+
+    setup_logging(verbose=verbose)
+
+    cfg = load_config()
+    _warn_if_legacy(cfg)
+
+    api = MemexAPI.from_config(cfg)
+    state = SyncState()
+
+    daemon_runner = ClipboardDaemon(cfg, state, api)
+    try:
+        daemon_runner.run()
+    finally:
+        api.close()
 
 
 def _notify_on_failure(cfg: dict) -> None:
