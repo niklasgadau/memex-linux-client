@@ -53,6 +53,38 @@ class MemexAPI:
     def post_clipboard(self, items: list[dict]) -> int:
         return self._post("/api/ingest/clipboard", items)
 
+    def post_claude(self, batch: dict, chunk_size: int = 200, timeout: float = 120.0) -> int:
+        """Send a multi-type Claude batch, splitting into smaller POSTs so a
+        large initial backfill doesn't exceed httpx/Cloudflare timeouts.
+
+        `batch` is a dict with keys: sessions, turns, recaps, plans, memory,
+        inputs — each mapping to a list of items. Empty lists are fine.
+        """
+        keys = ("sessions", "turns", "recaps", "plans", "memory", "inputs")
+        # Build chunks containing up to `chunk_size` items total across types,
+        # preserving type assignment so the server still knows what's what.
+        chunks: list[dict] = []
+        current: dict = {k: [] for k in keys}
+        current_count = 0
+        for k in keys:
+            for item in batch.get(k, []):
+                current[k].append(item)
+                current_count += 1
+                if current_count >= chunk_size:
+                    chunks.append(current)
+                    current = {kk: [] for kk in keys}
+                    current_count = 0
+        if current_count > 0:
+            chunks.append(current)
+
+        total = 0
+        for chunk in chunks:
+            resp = self.client.post("/api/ingest/claude", json=chunk, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            total += int(data.get("count", 0))
+        return total
+
     def health_check(self) -> bool:
         """Best-effort reachability check that swallows all errors.
 

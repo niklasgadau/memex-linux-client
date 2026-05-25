@@ -18,7 +18,12 @@ DEFAULTS = {
     "cf_client_secret": "",
     "api_token": "",
     "client": socket.gethostname(),
-    "sources": {"fish": False, "bash": False, "gpaste": {"enabled": False}},
+    "sources": {
+        "fish": False,
+        "bash": False,
+        "gpaste": {"enabled": False},
+        "claude_sessions": False,
+    },
     "notifications": {"enabled": True},
 }
 
@@ -100,6 +105,7 @@ def write_config(
         "[sources]",
         f"fish = {str(sources.get('fish', False)).lower()}",
         f"bash = {str(sources.get('bash', False)).lower()}",
+        f"claude_sessions = {str(bool(sources.get('claude_sessions', False))).lower()}",
         "",
         "[sources.gpaste]",
         f"enabled = {str(bool(gpaste_enabled)).lower()}",

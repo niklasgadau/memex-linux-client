@@ -26,6 +26,7 @@ EXPORTERS = {
     "fish": "memex_client.exporters.fish:FishExporter",
     "bash": "memex_client.exporters.bash:BashExporter",
     "gpaste": "memex_client.exporters.gpaste:GPasteExporter",
+    "claude_sessions": "memex_client.exporters.claude_sessions:ClaudeSessionsExporter",
 }
 
 
@@ -294,6 +295,15 @@ def setup() -> None:
         click.echo("  GPaste — not found")
         sources["gpaste"] = False
 
+    claude_dir = Path.home() / ".claude"
+    if claude_dir.exists():
+        sources["claude_sessions"] = click.confirm(
+            "  Claude Code (~/.claude) found — enable?", default=True
+        )
+    else:
+        click.echo("  Claude Code — not found")
+        sources["claude_sessions"] = False
+
     click.echo(f"\nTesting connection to {api_url}...")
     _test_auth(api_url, client_id, client_secret)
 
@@ -333,12 +343,13 @@ def status() -> None:
 
     sources = cfg.get("sources", {})
     click.echo(f"\nSources:")
+    name_width = max(8, max(len(n) for n in EXPORTERS))
     for name in EXPORTERS:
         enabled = _is_source_enabled(sources, name)
         mark = "enabled" if enabled else "disabled"
         sync_info = state.get(name)
         last = sync_info.get("last_sync_time", "never") if sync_info else "never"
-        click.echo(f"  {name:8s}  {mark:10s}  last sync: {last}")
+        click.echo(f"  {name:<{name_width}}  {mark:<10s}  last sync: {last}")
 
     click.echo(f"\nSystemd:")
     for unit, label in (
