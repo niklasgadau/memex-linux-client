@@ -87,7 +87,14 @@ class MemexAPI:
                 "Cloudflare Access reached but policy forbids this token — "
                 "attach a Service-Auth policy to the memex application.",
             )
-        raise AuthError("unknown", f"HTTP {resp.status_code}: {resp.text[:200]}")
+        if resp.status_code in (502, 503, 504):
+            raise AuthError(
+                "unreachable",
+                f"backend unreachable (HTTP {resp.status_code} from Cloudflare — "
+                "server likely down or restarting)",
+            )
+        snippet = " ".join(resp.text.split())[:160]
+        raise AuthError("unknown", f"HTTP {resp.status_code}: {snippet}")
 
     def _post(self, endpoint: str, items: list[dict]) -> int:
         total = 0

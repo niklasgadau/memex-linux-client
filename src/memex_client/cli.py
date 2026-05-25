@@ -355,6 +355,30 @@ def status() -> None:
             unit_status = "systemctl not found"
         click.echo(f"  {label:24s}  {unit_status}")
 
+    try:
+        show = subprocess.run(
+            ["systemctl", "--user", "show", "memex-sync.service",
+             "--property=Result,ExecMainStatus,ExecMainExitTimestamp"],
+            capture_output=True, text=True,
+        )
+        props = dict(
+            line.split("=", 1)
+            for line in show.stdout.strip().splitlines()
+            if "=" in line
+        )
+        last_run_result = props.get("Result", "")
+        exit_status = props.get("ExecMainStatus", "")
+        timestamp = props.get("ExecMainExitTimestamp", "") or "never"
+        if timestamp == "never" or not last_run_result:
+            run_status = "never run"
+        elif last_run_result == "success":
+            run_status = f"success @ {timestamp}"
+        else:
+            run_status = f"FAILED ({last_run_result}, exit {exit_status}) @ {timestamp}"
+    except FileNotFoundError:
+        run_status = "systemctl not found"
+    click.echo(f"  {'last sync run':24s}  {run_status}")
+
     click.echo(f"\nServer:")
     api = MemexAPI.from_config(cfg)
     try:
