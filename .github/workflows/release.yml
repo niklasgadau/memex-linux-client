@@ -32,9 +32,16 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          VERSION=$(svu next)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
+          # Use `svu next` when conventional commits suggest a bump, otherwise
+          # fall back to `svu patch` so every push to main still produces a new
+          # release (instead of trying to re-tag the previous version).
+          NEXT=$(svu next)
+          CURRENT=$(svu current)
+          if [ "$NEXT" = "$CURRENT" ]; then
+            NEXT=$(svu patch)
+          fi
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Version: $NEXT"
 
       - name: Build package tree
         run: |
