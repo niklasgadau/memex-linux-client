@@ -175,7 +175,7 @@ class ClaudeSessionsExporter(BaseExporter):
                 if not raw.strip():
                     continue
                 try:
-                    yield json.loads(raw)
+                    yield json.loads(raw.decode("utf-8", errors="replace"))
                 except json.JSONDecodeError:
                     continue
 
